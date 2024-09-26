@@ -84,24 +84,16 @@ echo "$CURRENT_TX_BYTES" > $LAST_TX_BYTES_FILE
 # 将累计流量和当前月份写回到文件
 echo "$CURRENT_MONTH $TOTAL_TRAFFIC" > $DATA_FILE
 
-# 将字节数转换为 MB 或 GB，并格式化输出
-if [ "$TOTAL_TRAFFIC" -ge $((1024 * 1024 * 1024)) ]; then
-    # 转换为 GB
-    TRAFFIC_DISPLAY=$(echo "scale=2; $TOTAL_TRAFFIC / 1024 / 1024 / 1024" | bc | awk '{printf "%.2f", $0}')
-    UNIT="GB"
-else
-    # 转换为 MB
-    TRAFFIC_DISPLAY=$(echo "scale=2; $TOTAL_TRAFFIC / 1024 / 1024" | bc | awk '{printf "%.2f", $0}')
-    UNIT="MB"
-fi
+# 将字节数转换为 GB
+TRAFFIC_DISPLAY=$(echo "scale=2; $TOTAL_TRAFFIC / 1024 / 1024 / 1024" | bc)
 
 # 输出格式化结果到控制台
-echo "本月累计流量: ${TRAFFIC_DISPLAY}${UNIT}"
+echo "本月累计流量: ${TRAFFIC_DISPLAY}GB"
 
 # 检查流量是否超过 .env 文件中的阈值
-LIMIT=$((TRAFFIC_LIMIT_GB * 1024 * 1024 * 1024))
+LIMIT=$(echo "$TRAFFIC_LIMIT_GB * 1024 * 1024 * 1024" | bc)
 
-if [ "$TOTAL_TRAFFIC" -ge "$LIMIT" ]; then
+if (( $(echo "$TOTAL_TRAFFIC >= $LIMIT" | bc -l) )); then
     if [ "$WECHAT_PUSH_ENABLED" -eq 1 ]; then
         # 获取企业微信 Access Token
         get_access_token() {
@@ -112,7 +104,7 @@ if [ "$TOTAL_TRAFFIC" -ge "$LIMIT" ]; then
         # 发送消息到企业微信
         send_wechat_message() {
             local send_url="https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=$ACCESS_TOKEN"
-            local message="本月累计流量: ${TRAFFIC_DISPLAY}${UNIT}, 已超过${TRAFFIC_LIMIT_GB}GB限制！"
+            local message="本月累计流量: ${TRAFFIC_DISPLAY}GB, 已超过${TRAFFIC_LIMIT_GB}GB限制！"
             
             # 准备 JSON 数据
             local data=$(cat <<EOF
