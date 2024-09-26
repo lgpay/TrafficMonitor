@@ -18,9 +18,17 @@ else
 fi
 
 # 检查环境变量中的必要参数
-if [ -z "$TRAFFIC_LIMIT_GB" ] || [ -z "$CORP_ID" ] || [ -z "$CORP_SECRET" ] || [ -z "$TO_USER" ] || [ -z "$AGENT_ID" ] || [ -z "$NETWORK_INTERFACE" ]; then
+if [ -z "$TRAFFIC_LIMIT_GB" ] || [ -z "$NETWORK_INTERFACE" ] || [ -z "$SHUTDOWN_DELAY_MINUTES" ] || [ -z "$WECHAT_PUSH_ENABLED" ]; then
     echo ".env 文件中缺少必要的参数"
     exit 1
+fi
+
+# 如果 WECHAT_PUSH_ENABLED 为 1，则检查企业微信相关配置
+if [ "$WECHAT_PUSH_ENABLED" -eq 1 ]; then
+    if [ -z "$CORP_ID" ] || [ -z "$CORP_SECRET" ] || [ -z "$TO_USER" ] || [ -z "$AGENT_ID" ]; then
+        echo ".env 文件中缺少企业微信相关的参数"
+        exit 1
+    fi
 fi
 
 # 使用 .env 文件中的网口名称
@@ -94,19 +102,20 @@ echo "本月累计流量: ${TRAFFIC_DISPLAY}${UNIT}"
 LIMIT=$((TRAFFIC_LIMIT_GB * 1024 * 1024 * 1024))
 
 if [ "$TOTAL_TRAFFIC" -ge "$LIMIT" ]; then
-    # 获取企业微信 Access Token
-    get_access_token() {
-        local token_url="https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=$CORP_ID&corpsecret=$CORP_SECRET"
-        ACCESS_TOKEN=$(curl -s "$token_url" | grep -o '"access_token":"[^"]*"' | awk -F\" '{print $4}')
-    }
+    if [ "$WECHAT_PUSH_ENABLED" -eq 1 ]; then
+        # 获取企业微信 Access Token
+        get_access_token() {
+            local token_url="https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=$CORP_ID&corpsecret=$CORP_SECRET"
+            ACCESS_TOKEN=$(curl -s "$token_url" | grep -o '"access_token":"[^"]*"' | awk -F\" '{print $4}')
+        }
 
-    # 发送消息到企业微信
-    send_wechat_message() {
-        local send_url="https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=$ACCESS_TOKEN"
-        local message="本月累计流量: ${TRAFFIC_DISPLAY}${UNIT}, 已超过${TRAFFIC_LIMIT_GB}GB限制！"
-        
-        # 准备 JSON 数据
-        local data=$(cat <<EOF
+        # 发送消息到企业微信
+        send_wechat_message() {
+            local send_url="https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=$ACCESS_TOKEN"
+            local message="本月累计流量: ${TRAFFIC_DISPLAY}${UNIT}, 已超过${TRAFFIC_LIMIT_GB}GB限制！"
+            
+            # 准备 JSON 数据
+            local data=$(cat <<EOF
 {
    "touser" : "$TO_USER",
    "msgtype" : "text",
@@ -119,27 +128,30 @@ if [ "$TOTAL_TRAFFIC" -ge "$LIMIT" ]; then
 EOF
 )
 
-        # 使用 curl 发送 POST 请求，并丢弃返回值
-        response=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "$data" "$send_url")
-        if [ "$response" -ne 200 ]; then
-            echo "消息发送失败，HTTP 状态码: $response"
+            # 使用 curl 发送 POST 请求，并丢弃返回值
+            response=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "$data" "$send_url")
+            if [ "$response" -ne 200 ]; then
+                echo "消息发送失败，HTTP 状态码: $response"
+            fi
+        }
+
+        # 调用函数
+        get_access_token
+        send_wechat_message
+    fi
+
+    # 读取关机等待时间
+    SHUTDOWN_DELAY_SECONDS=$((SHUTDOWN_DELAY_MINUTES * 60))
+
+    if [ "$SHUTDOWN_DELAY_SECONDS" -gt 0 ]; then
+        echo "流量已超出限制，系统将在 $SHUTDOWN_DELAY_MINUTES 分钟后关机。"
+        sleep $SHUTDOWN_DELAY_SECONDS  # 等待指定分钟数
+
+        # 执行关机命令
+        if command -v shutdown > /dev/null; then
+            shutdown -h now
+        else
+            poweroff
         fi
-    }
-
-    # 调用函数
-    get_access_token
-    send_wechat_message
-
-    # 等待5分钟，然后关机
-    echo "流量已超出限制，系统将在 5 分钟后关机。"
-    sleep 300  # 等待5分钟（300秒）
-    
-    # 执行关机命令
-    # 如果是 Debian，使用 shutdown; 如果是 Alpine，可以使用 poweroff
-    if command -v shutdown > /dev/null; then
-        shutdown -h now
-    else
-        poweroff
     fi
 fi
-
